@@ -9,7 +9,6 @@ import json
 import util.loginit
 import multiprocessing.dummy as mt
 import os
-import random
 import re
 import signal
 import time
@@ -49,6 +48,9 @@ SOGOU = [
 
 TYC_HOST = 'm.tianyancha.com'
 TYC_AGENT = 'Mozilla/5.0 (Linux; U; Android 7.0; zh-cn;)'
+TYC_LOCK = mt.Lock()
+TYC_DONE = mt.Value('i', 0)
+TYC_FAIL = mt.Value('i', 0)
 
 BREAK_EVENT = mt.Event()
 
@@ -58,7 +60,7 @@ logger = util.loginit.get_logger()
 def read_excel(fn, maxrows=-1):
     wb = xlrd.open_workbook(fn)
     sheet = wb.sheet_by_index(0)
-    dest = os.path.split(fn)[0]
+    dest = os.path.splitext(fn)[0]
     for i in range(sheet.nrows):
         # 忽略前两行 列头
         if i > 1:
@@ -79,8 +81,14 @@ def get_company(path, name, id=0):
         if BREAK_EVENT.is_set():
             return
         TYC(path, name, id).get_all()
-        logger.info('{} Done'.format(name))
+
+        with TYC_LOCK:
+            TYC_DONE.value += 1
+            done = TYC_DONE.value
+        logger.info('{} Done {}'.format(name, done))
     except Exception as e:
+        with TYC_LOCK:
+            TYC_FAIL.value += 1
         logger.error('{} {}'.format(name, e))
 
 
@@ -220,8 +228,6 @@ class TYC(object):
             self.id = id
 
         self.zfn = os.path.join(path, name + '.zip')
-        if os.path.exists(self.zfn) and os.path.getsize(self.zfn) > 0:
-            raise Exception('Exist Skip')
 
         logger.info('{} {}'.format(self.name, self.id))
 
@@ -264,11 +270,17 @@ class TYC(object):
         return 0
 
     def get_all(self):
-        with zipfile.ZipFile(self.zfn, mode='w', compression=zipfile.ZIP_DEFLATED) as zf:
+        with zipfile.ZipFile(self.zfn, mode='a', compression=zipfile.ZIP_DEFLATED) as zf:
             for qe in QueryInfoEnum:
                 q = qe.value
                 if BREAK_EVENT.is_set():
                     break
+                try:
+                    info = zf.getinfo(q.cate + '.json')
+                    logger.info('{} {} Exist Skip'.format(self.name, q.cate))
+                    continue
+                except:
+                    pass
                 try:
                     if qe == QueryInfoEnum.report:
                         rows = self.save_report(zf, q)
@@ -314,7 +326,7 @@ class TYC(object):
 
                     if total <= rows:
                         break
-                    if total < pn * 50:
+                    if total < pn * 10:
                         break
 
                     if BREAK_EVENT.is_set():
@@ -398,7 +410,7 @@ class TYC(object):
 
                 if total <= rows:
                     break
-                if total < pn * 50:
+                if total < pn * 10:
                     break
                 if BREAK_EVENT.is_set():
                     break
@@ -439,6 +451,8 @@ def main(*argv):
         print('usage:tyc.py [excelfile]')
         return
 
+    begtime = time.time()
+
     excelfile = argv[1]
     signal.signal(signal.SIGTERM, on_break)
     signal.signal(signal.SIGINT, on_break)
@@ -453,6 +467,11 @@ def main(*argv):
             pool.join()
             logger.info('Break!')
             break
+    with TYC_LOCK:
+        done = TYC_DONE.value
+        fail = TYC_FAIL.value
+
+    logger.info('Finish Done:{} Fail:{} Time:{:.2f} '.format(done, fail,time.time() - begtime))
 
 
 def chk_name(excelfile):
@@ -471,5 +490,5 @@ if __name__ == '__main__':
     import sys
 
     main(*sys.argv)
-    # get_company('e:/中粮茶业', '中土畜环球木业（北京）有限公司')
+    # get_company('e:/tyc/中粮茶业', '中土畜环球木业（北京）有限公司')
     # chk_name('e:/tyc/17户集团成员名单.xls')
