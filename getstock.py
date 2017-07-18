@@ -28,7 +28,7 @@ class StockInfoType(Enum):
     Sharebonus = 's'
     Lift_ban = 'j'
     Manager = 'm'
-
+    History ='p'
 
 def get_cn_stockinfo(stock):
     if BREAK_EVENT.is_set():
@@ -74,7 +74,8 @@ def get_cn_stockinfo(stock):
                 cn.JRJ(code, name, logger).get_lift_ban(DBQUEUE)
             elif p == StockInfoType.Manager:
                 cn.Sina(code, name, logger).get_manager(DBQUEUE)
-
+            elif p==StockInfoType.History:
+                cn.NetEase(code,name,logger).get_historydata(SAVEPATH+'History')
         logger.info('%s %s Done!', tna, code)
     except Exception as e:
         logger.error(e)

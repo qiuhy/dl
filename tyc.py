@@ -17,6 +17,8 @@ import zipfile
 import requests
 import xlrd
 
+
+import util.verify
 from enum import Enum
 from util.wraps import retry
 
@@ -48,6 +50,8 @@ SOGOU = [
 
 TYC_HOST = 'm.tianyancha.com'
 TYC_AGENT = 'Mozilla/5.0 (Linux; U; Android 7.0; zh-cn;)'
+# 'Mozilla/5.0 (Linux; U; Android 7.0; zh-cn;)'
+# 'Dalvik/2.1.0 (Linux; U; Android 7.0;)'
 TYC_LOCK = mt.Lock()
 TYC_DONE = mt.Value('i', 0)
 TYC_FAIL = mt.Value('i', 0)
@@ -210,11 +214,9 @@ class QueryInfoEnum(Enum):
 
 class TYC(object):
     def __init__(self, path, name, id=0):
-        try:
+        with TYC_LOCK:
             if not os.path.exists(path):
                 os.makedirs(path)
-        except:
-            pass
         self.path = path
         self.sess = requests.session()
         self.sess.headers['User-Agent'] = 'User-Agent:' + TYC_AGENT
@@ -232,23 +234,28 @@ class TYC(object):
         logger.info('{} {}'.format(self.name, self.id))
 
     @retry()
-    def get_json_cookie(self, url, id=0):
-        if id == 0:
-            self.set_cookie(id)
+    def get_json_cookie(self, url, key=None):
+        if key:
+            self.set_cookie(key)
         else:
             self.set_cookie(self.id)
-        return self.sess.get(url).json()
 
-    @retry()
-    def get_json(self, url):
-        return self.sess.get(url).json()
+        resp = self.sess.get(url)
+        if resp.status_code == 501:
+            with TYC_LOCK:
+                while not BREAK_EVENT.is_set():
+                    if chk_TYC():
+                        resp = self.sess.get(url)
+                        break
+        resp.raise_for_status()
+        return resp.json()
 
     def set_cookie(self, key):
         # 取得token 和 fxck_chars
         # 'http://dis.tianyancha.com/qq/{}.json?random={}'.format(self.id, int(time.time() * 1000))
 
         tongji_url = 'http://{}/tongji/{}.json?random={}'.format(TYC_HOST, key, int(time.time() * 1000))
-        tongji_json = self.get_json(tongji_url)
+        tongji_json = self.sess.get(tongji_url).json()
         tongji_data = tongji_json['data']['v'].split(',')
         js_code = ''.join([chr(int(code)) for code in tongji_data])
         token = re.findall('token=(\w+);', js_code)[0]
@@ -260,8 +267,7 @@ class TYC(object):
 
     def get_id(self):
         url = 'http://{}/v2/search/{}.json'.format(TYC_HOST, self.name)
-        self.set_cookie(self.name)
-        data = self.get_json(url)
+        data = self.get_json_cookie(url, self.name)
         if data['data'] is None:
             return 0
         for d in data['data']:
@@ -276,9 +282,9 @@ class TYC(object):
                 if BREAK_EVENT.is_set():
                     break
                 try:
-                    info = zf.getinfo(q.cate + '.json')
-                    logger.info('{} {} Exist Skip'.format(self.name, q.cate))
-                    continue
+                    if zf.getinfo(q.cate + '.json'):
+                        logger.info('{} {} Exist Skip'.format(self.name, q.cate))
+                        continue
                 except:
                     pass
                 try:
@@ -471,7 +477,7 @@ def main(*argv):
         done = TYC_DONE.value
         fail = TYC_FAIL.value
 
-    logger.info('Finish Done:{} Fail:{} Time:{:.2f} '.format(done, fail,time.time() - begtime))
+    logger.info('Finish Done:{} Fail:{} Time:{:.2f} '.format(done, fail, time.time() - begtime))
 
 
 def chk_name(excelfile):
@@ -486,9 +492,25 @@ def chk_name(excelfile):
             print(irow, n, e)
 
 
-if __name__ == '__main__':
-    import sys
+def chk_TYC():
+    while True:
+        url = 'http://antirobot.tianyancha.com/captcha/getCaptcha.json?t={}'.format(int(time.time() * 1000))
+        resp = requests.get(url).json()
+        data = resp['data']
+        clicklist_json = json.dumps(util.verify.get_verify_base64(data['bgImage'], data['targetImage']))
+        url = 'http://antirobot.tianyancha.com/captcha/checkCaptcha.json'
+        param = {'captchaId': data['id'], 'clickLocs': clicklist_json, 't': int(time.time() * 1000)}
+        resp = requests.get(url, param)
+        data = resp.json()
+        if data['state'] == 'ok':
+            break
 
-    main(*sys.argv)
+
+if __name__ == '__main__':
+    # import sys
+    #
+    # main(*sys.argv)
     # get_company('e:/tyc/中粮茶业', '中土畜环球木业（北京）有限公司')
     # chk_name('e:/tyc/17户集团成员名单.xls')
+    print(chk_TYC())
+    # print('ok!')

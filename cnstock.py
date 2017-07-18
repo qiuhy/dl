@@ -10,6 +10,8 @@ import tempfile
 import time
 import uuid
 import zipfile
+import requests
+
 from enum import Enum
 
 from bs4 import BeautifulSoup
@@ -671,10 +673,40 @@ class JRJ(Crawler):
         return
 
 
+class NetEase(Crawler):
+    def __init__(self, code, name='', logger=None):
+        Crawler.__init__(self, 'quotes.money.163.com', code=code, name=name, logger=logger)
+        return
+
+    @retry()
+    def get_historydata(self, path):
+        if self.code[0] in '023':
+            cate = '1'
+        elif self.code[0] in '69':
+            cate = '0'
+        else:
+            cate = ''
+        url = 'service/chddata.html?code={}{}'.format(cate, self.code)
+        resp = requests.get(self.get_hosturl(url))
+        resp.raise_for_status()
+        fn = '{}/{}.csv'.format(path, self.code)
+
+        with open(fn, mode='wb') as f:
+            f.write(resp.content)
+        rows = 0
+        with open(fn, 'rt') as f:
+            for row in f:
+                rows += 1
+            self.logger.info('历史股价 Get %d', rows - 1)
+        return rows - 1
+
+
 if __name__ == '__main__':
+    NetEase('300188').get_historydata('tmp')
     # Sina('000001').get_manager()
-    for stock in get_stocklist(['300188']):
-        # print(stock)
-        CNINFO(stock['code'], stock['zwjc'], stock['orgId']).get_brief('Anno')
-        #     # JRJ(stock['code']).get_lift_ban()
-        #     Sina(stock['code']).get_manamge()
+    # for stock in get_stocklist(['300188']):
+    # print(stock)
+    # CNINFO(stock['code'], stock['zwjc'], stock['orgId']).get_brief('Anno')
+    #     # JRJ(stock['code']).get_lift_ban()
+    #     Sina(stock['code']).get_manamge()
+
