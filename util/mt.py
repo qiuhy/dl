@@ -8,18 +8,22 @@ import signal
 import logging
 import itertools
 import multiprocessing.dummy as mt
+import threading
 
 BREAK_EVENT = mt.Event()
 
 
-def on_break(s, f):
-    BREAK_EVENT.set()
-    logging.getLogger('mt').warning('RECV BREAK SIGNAL {}!!!'.format(s))
+def allow_break(ev):
+    def on_break(s, f):
+        ev.set()
+        logging.getLogger('mt').warning('RECV BREAK SIGNAL {}!!!'.format(s))
+
+    signal.signal(signal.SIGTERM, on_break)
+    signal.signal(signal.SIGINT, on_break)
 
 
 def run2pool(fun, *argv, poolsize=10):
-    signal.signal(signal.SIGTERM, on_break)
-    signal.signal(signal.SIGINT, on_break)
+    allow_break(BREAK_EVENT)
 
     args = zip(*(a if hasattr(a, '__iter__') and not isinstance(a, str)
                  else itertools.repeat(a)

@@ -8,7 +8,9 @@ import tkinter as tk
 import PIL.Image, PIL.ImageTk
 import base64
 import io
-
+import requests
+import time
+import json
 
 class TYC_Verify(tk.Frame):
     def __init__(self, bg, tg, master=None):
@@ -93,8 +95,23 @@ def get_verify(bg, tg):
     app.resizable(False, False)
     dlg.master.title('天眼查-验证')
     dlg.mainloop()
-    return dlg.clicklist
+    ret =  dlg.clicklist.copy()
+    del dlg
+    return ret
 
+def chk_TYC():
+    url = 'http://antirobot.tianyancha.com/captcha/getCaptcha.json?t={}'.format(int(time.time() * 1000))
+    resp = requests.get(url).json()
+    data = resp['data']
+    clicklist_json = json.dumps(get_verify_base64(data['bgImage'], data['targetImage']))
+    url = 'http://antirobot.tianyancha.com/captcha/checkCaptcha.json'
+    param = {'captchaId': data['id'], 'clickLocs': clicklist_json, 't': int(time.time() * 1000)}
+    resp = requests.get(url, param)
+    data = resp.json()
+    if data['state'] == 'ok':
+        return True
+    else:
+        return False
 
 if __name__ == '__main__':
-    print(get_verify('e:/tyc/bg.png', 'e:/tyc/tg.png'))
+    print(chk_TYC())

@@ -17,7 +17,6 @@ import zipfile
 import requests
 import xlrd
 
-
 import util.verify
 from enum import Enum
 from util.wraps import retry
@@ -48,10 +47,12 @@ SOGOU = [
     '7---65-------0-----f--9--12-4e8cbad-3',
     '1-8--fl52--9----e-d4-b-a-c--3--0--7-6']
 
-TYC_HOST = 'm.tianyancha.com'
-TYC_AGENT = 'Mozilla/5.0 (Linux; U; Android 7.0; zh-cn;)'
-# 'Mozilla/5.0 (Linux; U; Android 7.0; zh-cn;)'
+AGENT_Android7 = 'Mozilla/5.0 (Linux; U; Android 7.0; zh-cn;)'
+AGENT_iPhone3 = 'Mozilla/5.0 (iPhone; U; CPU iPhone OS 3_0 like Mac OS X; en-us) AppleWebKit/528.18 (KHTML, like Gecko) Version/4.0 Mobile/7A341 Safari/528.16'
 # 'Dalvik/2.1.0 (Linux; U; Android 7.0;)'
+# 'Mozilla/5.0 (iPhone; CPU iPhone OS 9_2 like Mac OS X) AppleWebKit/601.1.46 (KHTML, like Gecko) Version/9.0 Mobile/13C75 Safari/601.1'
+TYC_HOST = 'm.tianyancha.com'
+TYC_AGENT = AGENT_iPhone3
 TYC_LOCK = mt.Lock()
 TYC_DONE = mt.Value('i', 0)
 TYC_FAIL = mt.Value('i', 0)
@@ -244,7 +245,7 @@ class TYC(object):
         if resp.status_code == 501:
             with TYC_LOCK:
                 while not BREAK_EVENT.is_set():
-                    if chk_TYC():
+                    if util.verify.chk_TYC():
                         resp = self.sess.get(url)
                         break
         resp.raise_for_status()
@@ -492,25 +493,11 @@ def chk_name(excelfile):
             print(irow, n, e)
 
 
-def chk_TYC():
-    while True:
-        url = 'http://antirobot.tianyancha.com/captcha/getCaptcha.json?t={}'.format(int(time.time() * 1000))
-        resp = requests.get(url).json()
-        data = resp['data']
-        clicklist_json = json.dumps(util.verify.get_verify_base64(data['bgImage'], data['targetImage']))
-        url = 'http://antirobot.tianyancha.com/captcha/checkCaptcha.json'
-        param = {'captchaId': data['id'], 'clickLocs': clicklist_json, 't': int(time.time() * 1000)}
-        resp = requests.get(url, param)
-        data = resp.json()
-        if data['state'] == 'ok':
-            break
-
-
 if __name__ == '__main__':
     # import sys
     #
     # main(*sys.argv)
     # get_company('e:/tyc/中粮茶业', '中土畜环球木业（北京）有限公司')
-    # chk_name('e:/tyc/17户集团成员名单.xls')
-    print(chk_TYC())
+    chk_name('e:/tyc/17户集团成员名单.xls')
+    # print(chk_TYC())
     # print('ok!')
