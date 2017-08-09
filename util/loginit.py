@@ -26,7 +26,7 @@ def get_logger(name=None):
     path, pfn = os.path.split(pyn)
     fn, ext = os.path.splitext(pfn)
 
-    fmt = logging.Formatter('%(asctime)s %(name)s %(levelname).1s %(message)s')
+    fmt = logging.Formatter('{asctime} {name} {threadName:10s} {levelname:.1s} {message}', style='{')
     logger = logging.getLogger(name)
     logger.setLevel(logging.DEBUG)
     sh = logging.StreamHandler(sys.stdout)
@@ -41,7 +41,7 @@ def get_logger(name=None):
     logger.addHandler(sh)
 
     fh = logging.FileHandler(os.path.join(path, fn + '.log'), mode='w', encoding='utf-8')
-    fh.setLevel(logging.INFO)
+    fh.setLevel(logging.DEBUG)
     fh.setFormatter(fmt)
     logger.addHandler(fh)
     return logger

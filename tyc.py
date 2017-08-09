@@ -125,11 +125,7 @@ def get_utm(key, fxck_chars):
     idx = 1
     """
 
-    if isinstance(key, str):
-        asc = ord(key[0])
-    else:
-        asc = ord(str(key)[0])
-
+    asc = ord(str(key)[0])
     if asc < 10:
         idx = asc
     else:

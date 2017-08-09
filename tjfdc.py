@@ -72,7 +72,7 @@ def get_listfile(fn):
         no = 0
         for fid, fname, farea in get_list():
             no += 1
-            writer.writerow([no, farea, fid, fname])
+            writer.writerow([no, farea, fname])
             if no % 100 == 0:
                 logger.info('get list {}'.format(no))
     logger.info('get list total {} '.format(no))
@@ -83,15 +83,13 @@ def get_id(fname):
     url = 'http://www.tjfdc.com.cn/Pages/fcdt/fcdtlist.aspx?&XMMC={}'.format(fname)
     soup = get_soup(url)
     ul = soup.find('ul', {'class': 'piclist'})
-    fid = None
     for li in ul.find_all('li'):
         a = li.find('a', {'class': 'picl_tit'})
         fid = a['href'].split('=')[-1]
         # tr = list(li.find_all('tr'))[1]
         # farea = list(tr.find_all('td'))[1].get_text(strip=True)
         if fname == a.get_text(strip=True):
-            break
-    return fid
+            return fid
 
 
 def get_base(fid):
@@ -165,8 +163,6 @@ def get_build(fid):
 
 
 def save2json(no, fname, fn):
-    if BREAK_EVENT.is_set():
-        return
     try:
         fid = get_id(fname)
         if fid is None:
@@ -178,7 +174,9 @@ def save2json(no, fname, fn):
             _DONE.value += 1
             if len(info['build']) == 0:
                 _EMPTY.value += 1
-        logger.info('{} {} {}'.format(no, fname, len(info['build'])))
+                logger.warning('{} {} 无楼栋信息'.format(no, fname))
+            else:
+                logger.info('{} {} {}'.format(no, fname, len(info['build'])))
     except Exception as e:
         with _LOCK:
             _FAIL.value += 1
@@ -192,9 +190,11 @@ def main(path, names=None):
     util.mt.allow_break(BREAK_EVENT)
     pool = mt.Pool(10)
     exists = 0
+    total = 0
     results = []
     for row in csv.reader(open(get_listfile(path + '/list.csv'))):
-        no, farea, fname = row[0], row[1], row[3]
+        total += 1
+        no, farea, fname = row[0], row[1], row[2]
         if names and fname not in names:
             continue
         fpath = os.path.join(path, farea)
@@ -206,10 +206,13 @@ def main(path, names=None):
         else:
             results.append(pool.apply_async(save2json, (no, fname, fn)))
 
+    logger.info('total:{} exists:{} need to download:{}'.format(total, exists, len(results)))
+    if len(results) == 0:
+        return
+
     while True:
-        BREAK_EVENT.wait(1)
         if BREAK_EVENT.is_set():
-            pool.close()
+            pool.terminate()
             pool.join()
             break
         else:
@@ -220,8 +223,9 @@ def main(path, names=None):
                     break
             if not running:
                 break
+        BREAK_EVENT.wait(1)
     with _LOCK:
-        logger.info('exist:{} done:{} {}  fail:{}'.format(exists, _DONE.value, _EMPTY.value, _FAIL.value))
+        logger.info('done:{} {}  fail:{}'.format(_DONE.value, _EMPTY.value, _FAIL.value))
 
 
 if __name__ == '__main__':

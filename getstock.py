@@ -28,7 +28,8 @@ class StockInfoType(Enum):
     Sharebonus = 's'
     Lift_ban = 'j'
     Manager = 'm'
-    History ='p'
+    History = 'p'
+
 
 def get_cn_stockinfo(stock):
     if BREAK_EVENT.is_set():
@@ -74,8 +75,8 @@ def get_cn_stockinfo(stock):
                 cn.JRJ(code, name, logger).get_lift_ban(DBQUEUE)
             elif p == StockInfoType.Manager:
                 cn.Sina(code, name, logger).get_manager(DBQUEUE)
-            elif p==StockInfoType.History:
-                cn.NetEase(code,name,logger).get_historydata(SAVEPATH+'History')
+            elif p == StockInfoType.History:
+                cn.NetEase(code, name, logger).get_historydata(SAVEPATH + 'History')
         logger.info('%s %s Done!', tna, code)
     except Exception as e:
         logger.error(e)
@@ -87,6 +88,72 @@ def get_cn_stock(logger):
 
     pool = mt.Pool(20)
     result = pool.map_async(get_cn_stockinfo, stocklist)
+    while not result.ready():
+        BREAK_EVENT.wait(1)
+        if BREAK_EVENT.is_set():
+            pool.close()
+            pool.join()
+            logger.info('Break!')
+            break
+
+
+def get_3b_stockinfo(stock):
+    if BREAK_EVENT.is_set():
+        return
+
+    with THREAD_LOCK:
+        THREAD_NO.value += 1
+        tno = THREAD_NO.value
+
+    code = stock['code']
+    name = stock['name']
+    orgid = ''
+    tna = '#{}@{:9s}'.format(tno, mt.current_process().name)
+
+    logger = logging.getLogger(code)
+    logger.setLevel(logging.DEBUG)
+    fh = logging.FileHandler('log/3b' + code + '.log', mode='w', encoding='utf-8')
+    formatter = logging.Formatter('%(asctime)s %(name)s-%(levelname)-8s %(message)s')
+    fh.setLevel(logging.DEBUG)
+    fh.setFormatter(formatter)
+    logger.addHandler(fh)
+    logger.info('%s %s', code, name)
+
+    try:
+        logger.info('%s %s Start', tna, code)
+
+        for p in PARAMS:
+            if BREAK_EVENT.is_set():
+                logger.info('%s %s Break!', tna, code)
+                return
+            elif p == StockInfoType.Anno:
+                cn.CNINFO(code, name, orgid, logger).get_3b_anno(SAVEPATH + '3BAnno', BREAK_EVENT)
+            elif p == StockInfoType.Brief:
+                # cn.CNINFO(code, name, orgid, logger).get_brief(DBQUEUE)
+                cn.ChinaIPO(code, name, logger).get_3b_brief(DBQUEUE)
+            # elif p == StockInfoType.fin:
+            #     cn.CNINFO(code, name, orgid, logger).get_report(SAVEPATH + 'CNReport', DBQUEUE)
+            elif p == StockInfoType.Holder:
+                cn.ChinaIPO(code, name, logger).get_3b_holder(DBQUEUE)
+            # elif p == StockInfoType.Sharebonus:
+            #     cn.Sina(code, name, logger).get_sharebonus(DBQUEUE)
+            # elif p == StockInfoType.Lift_ban:
+            #     cn.JRJ(code, name, logger).get_lift_ban(DBQUEUE)
+            elif p == StockInfoType.Manager:
+                cn.ChinaIPO(code, name, logger).get_3b_manager(DBQUEUE)
+            # elif p == StockInfoType.History:
+            #     cn.NetEase(code, name, logger).get_historydata(SAVEPATH + 'History')
+        logger.info('%s %s Done!', tna, code)
+    except Exception as e:
+        logger.error(e)
+
+
+def get_3b_stock(logger):
+    stocklist = cn.get_3b_stocklist()
+    logger.info('Stock count: %d', len(stocklist))
+
+    pool = mt.Pool(20)
+    result = pool.map_async(get_3b_stockinfo, stocklist)
     while not result.ready():
         BREAK_EVENT.wait(1)
         if BREAK_EVENT.is_set():
@@ -145,10 +212,8 @@ def get_hk_stockinfo(stock):
 
 
 def get_hk_stock(logger):
-
     if StockInfoType.Brief in PARAMS:
         logger.info('AH Stock: %d', hk.get_ah(DBQUEUE))
-
 
     hkthread = None
     if StockInfoType.Manager in PARAMS:
@@ -193,6 +258,8 @@ def get_stock(market):
         get_cn_stock(logger)
     elif market == 'hk':
         get_hk_stock(logger)
+    elif market == '3b':
+        get_3b_stock(logger)
     elif market == 'us':
         pass
     DBQUEUE.put(None)
@@ -207,7 +274,7 @@ def main(argv):
             arg = arg.lower()
             if arg.startswith('-m:'):
                 market = arg[3:]
-                if market not in ('cn', 'hk', 'us'):
+                if market not in ('cn', 'hk', '3b', 'us'):
                     raise Exception('')
             elif arg.startswith('-i:'):
                 for c in arg[3:]:
@@ -218,7 +285,7 @@ def main(argv):
             raise Exception('unknow usage')
         get_stock(market)
     except:
-        usage = 'usage:{} -m:[market] -i:[info]\nmarket:[cn, hk, us]\ninfo:[{}]\n{}'
+        usage = 'usage:{} -m:[market] -i:[info]\nmarket:[cn, hk, 3b, us]\ninfo:[{}]\n{}'
         print(usage.format(__file__, ''.join([x.value for x in StockInfoType]),
                            '\n'.join(['\t' + x.value + ':' + x.name for x in StockInfoType])))
 

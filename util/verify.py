@@ -4,13 +4,16 @@ Created on 17-7-17
 
 @author: hy_qiu
 """
-import tkinter as tk
-import PIL.Image, PIL.ImageTk
 import base64
 import io
-import requests
-import time
 import json
+import time
+import tkinter as tk
+
+import PIL.Image
+import PIL.ImageTk
+import requests
+
 
 class TYC_Verify(tk.Frame):
     def __init__(self, bg, tg, master=None):
@@ -95,9 +98,13 @@ def get_verify(bg, tg):
     app.resizable(False, False)
     dlg.master.title('天眼查-验证')
     dlg.mainloop()
-    ret =  dlg.clicklist.copy()
-    del dlg
+    ret = dlg.clicklist
+    try:
+        app.destroy()
+    except:
+        pass
     return ret
+
 
 def chk_TYC():
     url = 'http://antirobot.tianyancha.com/captcha/getCaptcha.json?t={}'.format(int(time.time() * 1000))
@@ -113,5 +120,32 @@ def chk_TYC():
     else:
         return False
 
+
+def get_verify_image():
+    url = 'http://antirobot.tianyancha.com/captcha/getCaptcha.json?t={}'.format(int(time.time() * 1000))
+    resp = requests.get(url).json()
+    data = resp['data']
+    return base64.standard_b64decode(data['bgImage']), base64.standard_b64decode(data['targetImage'])
+
+
+def save_verify_image(path, count=10):
+    import glob
+    beg = 0
+    for fn in glob.glob(path + '/bg[0-9][0-9][0-9][0-9].png'):
+        i = int(fn[-8:-4])
+        if beg < i:
+            beg = i
+    beg += 1
+    for i in range(count):
+        bg, tg = get_verify_image()
+        with open(path + '/bg{:04d}.png'.format(beg + i), mode='wb') as f:
+            f.write(bg)
+        with open(path + '/tg{:04d}.png'.format(beg + i), mode='wb') as f:
+            f.write(tg)
+        # if i % 100 == 0:
+        print(beg + i)
+
+
 if __name__ == '__main__':
-    print(chk_TYC())
+    # print(chk_TYC())
+    save_verify_image('e:/tyc2/verify')

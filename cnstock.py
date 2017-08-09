@@ -11,6 +11,7 @@ import time
 import uuid
 import zipfile
 import requests
+import json
 
 from enum import Enum
 
@@ -50,6 +51,24 @@ class ManagerType(Enum):
             return ManagerType.gg.value
 
 
+@retry()
+def post_resp(host, url, value):
+    headers = {'HOST': host, 'User-Agent': 'Mozilla/5.0'}
+    resp = requests.post('http://{}/{}'.format(host, url), data=value, headers=headers, timeout=30)
+    return resp
+
+
+def get_resp(host, url):
+    headers = {'HOST': host, 'User-Agent': 'Mozilla/5.0'}
+    resp = requests.get('http://{}/{}'.format(host, url), headers=headers, timeout=30)
+    return resp
+
+
+def get_soup(host, url):
+    resp = get_resp(host, url)
+    return BeautifulSoup(resp.text, 'html5lib')
+
+
 def get_stocklist(wlist=None):
     ret = []
     url = 'http://www.cninfo.com.cn/cninfo-new/js/data/szse_stock.json'
@@ -59,6 +78,21 @@ def get_stocklist(wlist=None):
         for a in stocklist:
             if wlist is None or a['code'] in wlist:
                 ret.append(a)
+    return ret
+
+
+def get_3b_stocklist():
+    ret = []
+    url = 'stbhq.do?vname=q&ABType=n&page=1&size=99999'
+    js = get_resp('stb.hqquery.jrj.com.cn', url).text
+    pos = js.find('"StockHq":[')
+    if pos == -1:
+        return ret
+    stockjson = json.loads('{' + js[pos:])
+    if stockjson:
+        stocklist = stockjson['StockHq']
+        for a in stocklist:
+            ret.append({'code': a[3], 'name': a[1]})
     return ret
 
 
@@ -135,6 +169,95 @@ class CNINFO(Crawler):
                 else:
                     continue
 
+            with zipfile.ZipFile(zfn, mode='a') as zf:
+                for ainfo in alist['announcements']:
+                    if break_event is not None and break_event.is_set():
+                        break
+                    try:
+                        ano += 1
+                        asize = self.save_anno2zip(zf, ainfo)
+                        if asize > 0:
+                            succeed += 1
+                            savebytes += asize
+                            self.logger.debug('Anno %d/%d Success %d', ano, total, asize)
+                    except Exception as e:
+                        failed += 1
+                        self.logger.error(e)
+                        self.logger.error('Anno %d/%d FAIL ', ano, total)
+
+        if usetemp and zfmoved:
+            zfn = file_move2path(zfn, savepath)
+            self.logger.info('Anno move to %s', zfn)
+
+        usedtime = time.time() - starttime
+        speed = savebytes / usedtime / 1024
+        self.logger.info('Anno Total:%d Exists:%d Succeed:%d FAIL:%d Time used:%.3fs Speed:%.2fK/s',
+                         total, existed, succeed, failed, usedtime, speed)
+        return
+
+    def get_3b_anno(self, savepath, break_event=None, usetemp=False):
+        if break_event is not None and break_event.is_set():
+            return
+        starttime = time.time()
+        url = 'new/hisAnnouncement/query'
+        pagesize = 50
+        pageno = 0
+        values = {'stock': self.code + ',gfbj0' + self.code + ';',
+                  'pageNum': pageno,
+                  'pageSize': pagesize,
+                  'tabName': 'fulltext'
+                  # 'seDate':	'2014-08-09+~+2017-08-09"',
+                  # 'sortType': 'asc'
+                  }
+        zfn = os.path.join(savepath, self.code + '.zip')
+        zfmoved = False
+        if os.path.exists(zfn):
+            with zipfile.ZipFile(zfn, mode='a') as zf:
+                existed = len(zf.filelist)
+        else:
+            existed = 0
+
+        total = 0
+        savebytes = 0
+        succeed = 0
+        failed = 0
+        hasmore = True
+        while hasmore:
+            if break_event is not None and break_event.is_set():
+                break
+            ano = pageno * pagesize
+            pageno += 1
+            try:
+                values['pageNum'] = pageno
+                alist = post_resp('three.cninfo.com.cn', url, values).json()
+                hasmore = alist['hasMore']
+                if pageno == 1:
+                    total = alist['totalAnnouncement']
+                    if total == 0:
+                        self.logger.warning('Anno list is empty')
+                        return
+                    else:
+                        if existed / total > 0.99:
+                            self.logger.info('Anno Total %d Exists %d Skip it', total, existed)
+                            return
+                        elif usetemp:
+                            zfn = file_copy2path(zfn, tempfile.gettempdir())
+                            zfmoved = True
+                            self.logger.info('Anno Total %d Exists %d copy to %s', total, existed, zfn)
+                        else:
+                            self.logger.info('Anno Total %d Exists %d', total, existed)
+                if existed + succeed + failed >= total:
+                    break
+                self.logger.debug('Anno getting page %d (%d-%d/%d)', pageno,
+                                  ano + 1, ano + pagesize, total)
+            except Exception as e:
+                self.logger.error(e)
+                self.logger.error('Anno getting page %d FAIL', pageno)
+                if pageno * pagesize >= total:
+                    # is last page
+                    return
+                else:
+                    continue
             with zipfile.ZipFile(zfn, mode='a') as zf:
                 for ainfo in alist['announcements']:
                     if break_event is not None and break_event.is_set():
@@ -701,12 +824,179 @@ class NetEase(Crawler):
         return rows - 1
 
 
+class ChinaIPO(Crawler):
+    """
+    新三板在线 www.chinaipo.com
+    """
+
+    def __init__(self, code, name='', logger=None):
+        Crawler.__init__(self, 'www.chinaipo.com', code=code, name=name, logger=logger)
+        return
+
+    @staticmethod
+    def get_email(td):
+        a = td.find('a')
+        email = ''
+        if a and a.has_attr('data-cfemail'):
+            cf = a['data-cfemail']
+            key = int('0x' + cf[0:2], 16)
+            email = ''
+            for i in range(1, int(len(cf) / 2)):
+                email += chr(key ^ int('0x' + cf[i * 2:i * 2 + 2], 16))
+        return email
+
+    def get_3b_brief(self, dbqueue=None):
+        try:
+            url = 'stock/{}/profile.html'.format(self.code)
+            soup = get_soup(self.host, url)
+            div = soup.find('div', class_='f10_data')
+            if div is None:
+                print(soup)
+            tb = div.table.tbody
+            param = [self.code]
+            for tr in tb.find_all('tr'):
+                tds = list(tr.find_all('td'))
+                val = tds[1].get_text(strip=True)
+                if val.startswith('[email protected]'):
+                    val = self.get_email(tds[1])
+                elif val == '-':
+                    val = ''
+                param.append(val)
+
+            sql = 'replace into brief3b values({})'.format(('?,' * len(param))[:-1])
+
+            ops = [(sql, param)]
+            if dbqueue:
+                dbqueue.put(ops)
+                self.logger.info('公司简介 Put to queue')
+            else:
+                print(ops)
+        except Exception as e:
+            self.logger.error(e)
+            self.logger.error('公司简介 FAIL')
+
+    def get_3b_holder(self, dbqueue=None):
+        try:
+            icount = 0
+            holdertype = HolderType.Top10.value
+            url = 'stock/{}/shareholder.html'.format(self.code)
+            ops = []
+            param = [holdertype, self.code]
+            sql = 'delete from holder_list' \
+                  ' where holderID in (select holderID from holder where "股东类型" = ? and "机构ID" = ?)'
+            ops.append((sql, param))
+            sql = 'delete from holder where "股东类型" = ? and "机构ID" = ?'
+            ops.append((sql, param))
+
+            soup = get_soup(self.host, url)
+            pstock = soup.find('div', class_='pstock')
+
+            holderid = ''
+            for div in pstock.find_all('div', recursive=False):
+                if 'small_title' in div['class']:
+                    spans = list(div.find_all('span'))
+                    holderid = str(uuid.uuid1())
+                    enddate = spans[0].get_text(strip=True)[5:]
+                    pubdate = spans[1].get_text(strip=True)[5:]
+                    param = [holderid, holdertype, self.code, enddate, pubdate]
+                    sql = 'insert into holder values(?,?,?,?,?)'
+                    ops.append((sql, param))
+
+                elif 'f10_data' in div['class']:
+                    sql = 'insert into holder_list values(?,?,?,?,?,?)'
+                    trs = list(div.table.tbody.find_all('tr'))
+                    for i in range(1, len(trs)):
+                        param = [holderid, i]
+                        for td in trs[i].find_all('td'):
+                            param.append(td.get_text(strip=True))
+                        ops.append((sql, param))
+                        icount += 1
+                    holderid = ''
+
+            if dbqueue:
+                dbqueue.put(ops)
+            else:
+                for op in ops:
+                    print(op)
+
+            if icount:
+                self.logger.info('%s Put to queue %d', holdertype, icount)
+            else:
+                self.logger.warning('%s Is zero', holdertype)
+
+        except Exception as e:
+            self.logger.error(e)
+            self.logger.error('%s FAIL', holdertype)
+
+    def get_3b_manager(self, dbqueue=None):
+        try:
+            icount = 0
+            url = '/stock/{}/management.html'.format(self.code)
+            ops = []
+            soup = get_soup(self.host, url)
+            pstock = soup.find('div', class_='pstock')
+
+            div = pstock.find('div', class_='small_title', recursive=False)
+            enddate = div.find('span').get_text(strip=True)[5:]
+            divs = list(pstock.find_all('div', class_='f10_data', recursive=False))
+
+            sql = 'replace into personstock values(?,?,?,?,?)'
+            trs = list(divs[0].table.tbody.find_all('tr'))
+            for i in range(1, len(trs)):
+                vals = []
+                for td in trs[i].find_all('td'):
+                    vals.append(td.get_text(strip=True))
+
+                # "机构ID",  "姓名", "持股数量","持股变动原因","截止日期"
+                if vals[3] != '-':
+                    ops.append((sql, [self.code, vals[0], vals[3], None, enddate]))
+                    icount += 1
+
+            # ("机构ID", "姓名", "类型", "职务", "起始日期", "终止日期", "薪资")
+            sqlm = 'replace into manager values(?,?,?,?,?,?,?)'
+            # "机构ID",  "姓名", "性别" ,"出生日期" ,"学历" ,"国籍" ,"简历"
+            names = []
+            sqlp = 'replace into person values(?,?,?,?,?,?,?)'
+            for tb in divs[1].find_all('table', recursive=False):
+                tds = list(tb.find_all('td'))
+                name = tds[0].get_text(strip=True)[3:]
+                sex = tds[1].get_text(strip=True)[3:]
+                edu = tds[2].get_text(strip=True)[3:]
+                cate = tds[3].get_text(strip=True)[3:]
+                begdate = tds[4].get_text(strip=True)[4:]
+                enddate = tds[5].get_text(strip=True)[9:]
+                brife = tds[7].get_text(strip=True)
+                ops.append((sqlm, [self.code, name, ManagerType.get_type(cate), cate, begdate, enddate, None]))
+                if name not in names:
+                    ops.append((sqlp, [self.code, name, sex, None, edu, None, brife]))
+                    names.append(name)
+                    icount += 1
+
+            if dbqueue:
+                dbqueue.put(ops)
+            else:
+                for op in ops:
+                    print(op)
+
+            if icount:
+                self.logger.info('董监高 Put to queue %d', icount)
+            else:
+                self.logger.warning('董监高 Is zero')
+
+        except Exception as e:
+            self.logger.error(e)
+            self.logger.error('董监高 FAIL')
+
+
 if __name__ == '__main__':
-    NetEase('300188').get_historydata('tmp')
+    # print(len(get_3b_stocklist()))
+    # NetEase('300188').get_historydata('tmp')
+    # ChinaIPO('834780').get_3b_holder()
+    # ChinaIPO('834780').get_3b_manager()
+    CNINFO('430486').get_3b_anno('e:/stock/3BAnno')
     # Sina('000001').get_manager()
     # for stock in get_stocklist(['300188']):
     # print(stock)
     # CNINFO(stock['code'], stock['zwjc'], stock['orgId']).get_brief('Anno')
     #     # JRJ(stock['code']).get_lift_ban()
     #     Sina(stock['code']).get_manamge()
-
