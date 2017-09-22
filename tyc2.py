@@ -9,12 +9,12 @@ import multiprocessing.dummy as mt
 import os
 import re
 import time
-
+import urllib.parse
 import requests
 from bs4 import BeautifulSoup
-import threading
 
 import util.excel
+import util.js
 import util.fileutil
 import util.loginit
 import util.mt
@@ -23,9 +23,6 @@ from util.wraps import retry
 
 AGENT_FIREFOX = 'Mozilla/5.0 (Windows NT 10.0; WOW64; rv:54.0) Gecko/20100101 Firefox/54.0'
 # AGENT_Android7 = 'Mozilla/5.0 (Linux; U; Android 7.0; zh-cn;)'
-# AGENT_iPhone3 = 'Mozilla/5.0 (iPhone; U; CPU iPhone OS 3_0 like Mac OS X; en-us) AppleWebKit/528.18 (KHTML, like Gecko) Version/4.0 Mobile/7A341 Safari/528.16'
-# 'Dalvik/2.1.0 (Linux; U; Android 7.0;)'
-# 'Mozilla/5.0 (iPhone; CPU iPhone OS 9_2 like Mac OS X) AppleWebKit/601.1.46 (KHTML, like Gecko) Version/9.0 Mobile/13C75 Safari/601.1'
 TYC_HOST = 'https://www.tianyancha.com'
 
 SOGOU = [
@@ -49,9 +46,30 @@ _EMPTY = mt.Value('i', 0)
 logger = util.loginit.get_logger('tyc2')
 
 
+def get_login():
+    url = 'https://www.tianyancha.com/cd/login.json'
+    login_json = {'mobile': '13606181270',
+                  'cdpassword': 'de2acaac3f5037d6acfba46454cbca87',
+                  'loginway': 'PL',
+                  'autoLogin': True}
+    resp = SESS.post(url, json=login_json)
+    logger.info('get login')
+    resp.raise_for_status()
+    data = resp.json()
+    if data['state'] == 'ok':
+        SESS.cookies.set('auth_token', data['data']['token'])
+        SESS.cookies.set('tyc-user-info', util.js.encodeURIComponent(data['data']))
+    return True
+
+
+SESS = requests.session()
+SESS.headers['User-Agent'] = AGENT_FIREFOX
+get_login()
+
+
 def wait_for_verify():
     logger.warning('wait_for_verify start')
-    while not util.verify.chk_TYC():
+    while not util.verify.chk_TYC(SESS):
         if BREAK_EVENT.is_set():
             return
         time.sleep(1)
@@ -66,6 +84,7 @@ def get_utm(key, utm_chars):
     return utm
 
 
+# 页面分析 PageFunction 默认处理函数 取其中的Table 返回json
 def pgf_table(datainfo, div_head):
     tb = div_head.find('table', class_='companyInfo-table')
     if len(datainfo.colnames) == 0:
@@ -86,6 +105,10 @@ def pgf_table(datainfo, div_head):
         yield item
 
 
+# 字段分析 ColumnDefineFunction 默认处理函数
+# cdf :string  表示element.find(cdf).getText
+# cdf :callable  表示cdf(element)
+# cdf :'' or None  表示忽略
 def cdf_text(element, cdf=None):
     if cdf is None or cdf == '':
         return
@@ -99,6 +122,7 @@ def cdf_text(element, cdf=None):
         return element.get_text(strip=True)
 
 
+# 字段分析 ColumnDefineFunction “详情”
 def cdf_more(element):
     span = element.find('span', class_='companyinfo_show_more_btn')
     if span and span.has_attr('onclick'):
@@ -109,6 +133,17 @@ def cdf_more(element):
             except:
                 pass
     return ''
+
+
+# 字段分析 ColumnDefineFunction 对外投资企业的年报信息
+def cdf_invest(element):
+    a = element.find('a')
+    if a:
+        compid = a['href'].split('/')[-1].strip()
+        compna = '对外投资-' + a.get_text(strip=True)
+        return TYC2(compna, compid).get_company([DataInfo_Report])
+    else:
+        return element.get_text(strip=True)
 
 
 def get_base(soup):
@@ -158,6 +193,7 @@ def get_base(soup):
     return base
 
 
+# 页面分析 PageFunction 主要人员
 def pfg_staff(di, div_head):
     for div in div_head.find_all('div', class_='staffinfo-module-container'):
         title = div.div.div.get_text(strip=True)
@@ -165,6 +201,7 @@ def pfg_staff(di, div_head):
         yield {'姓名': tname, '职位': title}
 
 
+# 页面分析 PageFunction 企业简介
 def pgf_stockbrife(di, div_head):
     brife = {}
     tb = div_head.find('table', class_='companyInfo-table')
@@ -177,6 +214,7 @@ def pgf_stockbrife(di, div_head):
     yield brife
 
 
+# 页面分析 PageFunction 核心团队
 def pgf_teamMember(di, div_head):
     for div in div_head.find_all('div', class_='team-item'):
         name = div.find('div', class_='team-name').get_text(strip=True)
@@ -185,6 +223,7 @@ def pgf_teamMember(di, div_head):
         yield {'姓名': name, '职位': title, '简介': brife}
 
 
+# 页面分析 PageFunction 企业业务
 def pgf_firmProduct(di, div_head):
     for div in div_head.find_all('div', class_='product-item'):
         title = div.find('span', class_='title').get_text(strip=True)
@@ -270,6 +309,8 @@ class DataInfo:
                         break
 
 
+DataInfo_Report = DataInfo('企业年报', 'report', headdict={'tyc-event-ch': 'CompangyDetail.nianbao'})
+
 TYC_DATALIST = [
     # 股票信息
     DataInfo('企业简介', 'stockbrife', pgf=pgf_stockbrife, headdict={'id': 'nav-main-stockNum'}),
@@ -281,9 +322,10 @@ TYC_DATALIST = [
     # 企业背景
     DataInfo('股东信息', 'holder', cdfdict={'股东': 'a', '认缴出资': 'span'}, coldict={0: '股东'}),
     DataInfo('主要人员', 'staff', pgf=pfg_staff),
-    DataInfo('对外投资', 'invest', cdfdict={'被投资法定代表人': 'a'}),
+    DataInfo('对外投资', 'invest', cdfdict={'被投资企业名称': cdf_invest, '被投资法定代表人': 'a'}),
+    # DataInfo('对外投资', 'invest', cdfdict={'被投资法定代表人': 'a'}),
     DataInfo('变更记录', 'changeinfo'),
-    DataInfo('企业年报', 'report', headdict={'tyc-event-ch': 'CompangyDetail.nianbao'}),
+    DataInfo_Report,
     DataInfo('分支机构', 'branch'),
 
     # 企业发展
@@ -324,30 +366,29 @@ TYC_DATALIST = [
 
 
 class TYC2:
-    def __init__(self, name, id=0):
-        self.sess = requests.session()
-        self.sess.headers['User-Agent'] = AGENT_FIREFOX
-        if id == 0:
-            id = self.get_companyid(name)
-        if id:
-            self.cid = id
-            self.cname = name
+    def __init__(self, cname, cid=0):
+        if cid == 0:
+            cid = self.get_companyid(cname)
+        if cid:
+            self.cid = cid
+            self.cname = cname
         else:
             raise Exception('名称不匹配')
 
     @retry()
     def get_response(self, url, param=None):
         with _LOCK:
-            resp = self.sess.get(url, params=param, timeout=60)
-            if resp.status_code != 200:
-                logger.debug('{} {} {}'.format(resp.status_code, url, param if param else ''))
-            # print(threading.current_thread().name, resp.status_code, url, param)
-
+            resp = SESS.get(url, params=param, timeout=60)
+            # if resp.url.startswith(TYC_HOST + '/login?'):
+            #     while not self.get_login():
+            #         time.sleep(2)
+            #     resp = SESS.get(url, params=param, timeout=60)
+            # el
             if resp.status_code in [401, 403, 503] \
-                    or resp.url.startswith(TYC_HOST + '/login?') \
                     or resp.url.find('/antirobot.tianyancha.com/captcha/verify?') >= 0:
+                logger.debug('{} {}'.format(resp.status_code, resp.url))
                 wait_for_verify()
-                resp = self.sess.get(url, params=param, timeout=60)
+                resp = SESS.get(url, params=param, timeout=60)
 
             resp.raise_for_status()
             return resp
@@ -367,11 +408,11 @@ class TYC2:
             tongji_data = tongji_json['data'].split(',')
             js_code = ''.join([chr(int(code)) for code in tongji_data])
             token = re.findall('token=(\w+);', js_code)[0]
-            utm_chars = re.findall('\'([\d\,]+)\'', js_code)[0].split(',')
+            utm_chars = re.findall('\'([\d,]+)\'', js_code)[0].split(',')
             utm = get_utm(key, utm_chars)
 
-            self.sess.cookies.set('token', token)
-            self.sess.cookies.set('_utm', utm)
+            SESS.cookies.set('token', token)
+            SESS.cookies.set('_utm', utm)
         except Exception as e:
             raise e
 
@@ -453,14 +494,18 @@ class TYC2:
 
         return data
 
-    def get_company(self):
+    def get_company(self, datalist=None):
         url = '{}/company/{}'.format(TYC_HOST, self.cid)
         soup = self.get_soup(url)
 
         comyany = dict()
         comyany['id'] = str(self.cid)
         comyany['基本信息'] = get_base(soup)
-        for ti in TYC_DATALIST:
+
+        if datalist is None:
+            datalist = TYC_DATALIST
+
+        for ti in datalist:
             if BREAK_EVENT.is_set():
                 return
             if ti.key == 'report':
@@ -501,7 +546,7 @@ def save_company(no, name, fn):
         logger.error('{} {} FAIL {}'.format(no, name, e))
 
 
-def main(fn, startrow, namecol, pathcol, sheetindex=0):
+def main(fn, startrow, namecol, pathcol=None, sheetindex=0, poolsize=10):
     if not os.path.exists(fn):
         print('{} dose not exists')
         return
@@ -512,15 +557,18 @@ def main(fn, startrow, namecol, pathcol, sheetindex=0):
     exists = 0
     total = 0
     results = []
-    pool = mt.Pool(10)
+    pool = mt.Pool(poolsize)
     util.mt.allow_break(BREAK_EVENT)
     for no, row in util.excel.read_excel(fn, sheetindex=sheetindex, startrow=startrow):
         name = row[namecol].value.strip()
         if name == '':
             continue
+        if pathcol:
+            path = row[pathcol].value.strip()
+            path = os.path.join(basepath, path)
+        else:
+            path = basepath
 
-        path = row[pathcol].value.strip()
-        path = os.path.join(basepath, path)
         jfn = os.path.join(path, name + '.json')
 
         total += 1
@@ -552,7 +600,15 @@ def main(fn, startrow, namecol, pathcol, sheetindex=0):
 
 
 if __name__ == '__main__':
-    main('e:/tyc2/17户集团成员名单汇总.xls', 2, 1, 5, 1)
+    # main('e:/tyc2/17户集团成员名单汇总.xls', 2, 1, 5, 1)
+    main('d:/用户目录/我的文档/税软/2017/产品/大数据/厦门/总局“523”专案-厦门涉案企业名单.xlsx'
+         , 3, 2, poolsize=1)
     # 厦门市美亚柏科信息股份有限公司 31333007
     # 北京百度网讯科技有限公司 22822
-    # TYC2('北京北汽恒盛置业有限公司顺义餐饮管理分公司').get_company()
+
+    # 中交投资有限公司  7.1亿元，110102710934721
+    # 中国化工橡胶有限公司  7.3亿元110102100008069
+    # 国家电力投资集体公司  6.6亿元，911100007109310534
+    # companys = ['国家电力投资集团公司']
+    # for n in companys:
+    #     save_company('', n, 'e:/tyc2/北京西城区/' + n + '.json')

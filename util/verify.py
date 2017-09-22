@@ -26,16 +26,16 @@ class TYC_Verify(tk.Frame):
         self.bg = tk.Canvas()
         self.tg = tk.Canvas()
         self.ls = tk.Listbox()
-        self.ok = tk.Button(text="OK", command=self.on_ok)
-        self.clear = tk.Button(text="Clear", command=self.on_clear)
+        self.ok = tk.Button(text="√", command=self.on_ok)
+        self.clear = tk.Button(text="×", command=self.on_clear)
         self.bg.bind('<Button-1>', self.on_click)
 
         self.bg.place(x=10, y=10, width=320, height=100)
-        self.tg.place(x=10, y=120, width=120, height=30)
-        self.ls.place(x=340, y=10, width=70, height=140)
+        self.tg.place(x=10, y=120, width=320, height=30)
+        self.ls.place(x=340, y=10, width=70, height=100)
 
-        self.ok.place(x=200, y=120, width=60, height=30)
-        self.clear.place(x=270, y=120, width=60, height=30)
+        self.ok.place(x=340, y=120, width=30, height=30)
+        self.clear.place(x=380, y=120, width=30, height=30)
 
     def on_init(self, bg, tg):
         self.ibg = PIL.ImageTk.PhotoImage(PIL.Image.open(bg))
@@ -81,9 +81,9 @@ class TYC_Verify(tk.Frame):
         return
 
 
-def get_verify_base64(bg, tg):
-    bg = io.BytesIO(base64.standard_b64decode(bg))
-    tg = io.BytesIO(base64.standard_b64decode(tg))
+def get_verify_base64(data):
+    bg = io.BytesIO(base64.standard_b64decode(data['bgImage']))
+    tg = io.BytesIO(base64.standard_b64decode(data['targetImage']))
     return get_verify(bg, tg)
 
 
@@ -106,14 +106,18 @@ def get_verify(bg, tg):
     return ret
 
 
-def chk_TYC():
-    url = 'http://antirobot.tianyancha.com/captcha/getCaptcha.json?t={}'.format(int(time.time() * 1000))
-    resp = requests.get(url).json()
-    data = resp['data']
-    clicklist_json = json.dumps(get_verify_base64(data['bgImage'], data['targetImage']))
+def chk_TYC(sess):
+    # 监测页面 http://antirobot.tianyancha.com/captcha/verify
+    url = 'http://antirobot.tianyancha.com/captcha/getCaptcha.json'
+    param = {'t': int(time.time() * 1000), '_': int(time.time() * 1000)}
+    resp = sess.get(url, params=param)
+    data = resp.json()
+    data = data['data']
+    clicklist = json.dumps(get_verify_base64(data))
     url = 'http://antirobot.tianyancha.com/captcha/checkCaptcha.json'
-    param = {'captchaId': data['id'], 'clickLocs': clicklist_json, 't': int(time.time() * 1000)}
-    resp = requests.get(url, param)
+    param = {'captchaId': data['id'], 'clickLocs': clicklist,
+             't': int(time.time() * 1000), '_': int(time.time() * 1000)}
+    resp = sess.get(url, params=param)
     data = resp.json()
     if data['state'] == 'ok':
         return True

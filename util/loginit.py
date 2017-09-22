@@ -40,7 +40,7 @@ def get_logger(name=None):
     sh.setFormatter(fmt)
     logger.addHandler(sh)
 
-    fh = logging.FileHandler(os.path.join(path, fn + '.log'), mode='w', encoding='utf-8')
+    fh = logging.FileHandler(os.path.join(path, 'log/' + fn + '.log'), mode='w', encoding='utf-8')
     fh.setLevel(logging.DEBUG)
     fh.setFormatter(fmt)
     logger.addHandler(fh)

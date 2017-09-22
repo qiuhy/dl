@@ -112,15 +112,9 @@ def get_3b_stockinfo(stock):
 
     logger = logging.getLogger(code)
     logger.setLevel(logging.DEBUG)
-    fh = logging.FileHandler('log/3b' + code + '.log', mode='w', encoding='utf-8')
-    formatter = logging.Formatter('%(asctime)s %(name)s-%(levelname)-8s %(message)s')
-    fh.setLevel(logging.DEBUG)
-    fh.setFormatter(formatter)
-    logger.addHandler(fh)
-    logger.info('%s %s', code, name)
 
     try:
-        logger.info('%s %s Start', tna, code)
+        logger.info('%s %s %s Start', tna, code, name)
 
         for p in PARAMS:
             if BREAK_EVENT.is_set():
@@ -129,21 +123,13 @@ def get_3b_stockinfo(stock):
             elif p == StockInfoType.Anno:
                 cn.CNINFO(code, name, orgid, logger).get_3b_anno(SAVEPATH + '3BAnno', BREAK_EVENT)
             elif p == StockInfoType.Brief:
-                # cn.CNINFO(code, name, orgid, logger).get_brief(DBQUEUE)
                 cn.ChinaIPO(code, name, logger).get_3b_brief(DBQUEUE)
-            # elif p == StockInfoType.fin:
-            #     cn.CNINFO(code, name, orgid, logger).get_report(SAVEPATH + 'CNReport', DBQUEUE)
             elif p == StockInfoType.Holder:
                 cn.ChinaIPO(code, name, logger).get_3b_holder(DBQUEUE)
-            # elif p == StockInfoType.Sharebonus:
-            #     cn.Sina(code, name, logger).get_sharebonus(DBQUEUE)
-            # elif p == StockInfoType.Lift_ban:
-            #     cn.JRJ(code, name, logger).get_lift_ban(DBQUEUE)
             elif p == StockInfoType.Manager:
                 cn.ChinaIPO(code, name, logger).get_3b_manager(DBQUEUE)
-            # elif p == StockInfoType.History:
-            #     cn.NetEase(code, name, logger).get_historydata(SAVEPATH + 'History')
-        logger.info('%s %s Done!', tna, code)
+
+        logger.info('%s %s %s Done!', tna, code, name)
     except Exception as e:
         logger.error(e)
 
@@ -153,11 +139,13 @@ def get_3b_stock(logger):
     logger.info('Stock count: %d', len(stocklist))
 
     pool = mt.Pool(20)
+
     result = pool.map_async(get_3b_stockinfo, stocklist)
     while not result.ready():
         BREAK_EVENT.wait(1)
         if BREAK_EVENT.is_set():
-            pool.close()
+            logger.info('Recv Break signal!')
+            pool.terminate()
             pool.join()
             logger.info('Break!')
             break
@@ -247,7 +235,7 @@ def get_stock(market):
     signal.signal(signal.SIGTERM, on_break)
     signal.signal(signal.SIGINT, on_break)
 
-    logging.config.fileConfig("logging.conf")
+    logging.config.fileConfig("conf/logging.conf")
     logger = logging.getLogger()
     logger.info('%s Beginning', market)
 

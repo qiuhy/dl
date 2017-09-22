@@ -199,9 +199,11 @@ class CNINFO(Crawler):
         if break_event is not None and break_event.is_set():
             return
         starttime = time.time()
+        host = 'three.cninfo.com.cn'
         url = 'new/hisAnnouncement/query'
         pagesize = 50
         pageno = 0
+        existed = 0
         values = {'stock': self.code + ',gfbj0' + self.code + ';',
                   'pageNum': pageno,
                   'pageSize': pagesize,
@@ -210,55 +212,46 @@ class CNINFO(Crawler):
                   # 'sortType': 'asc'
                   }
         zfn = os.path.join(savepath, self.code + '.zip')
-        zfmoved = False
-        if os.path.exists(zfn):
-            with zipfile.ZipFile(zfn, mode='a') as zf:
-                existed = len(zf.filelist)
-        else:
-            existed = 0
 
+        if os.path.exists(zfn):
+            if usetemp:
+                zfn = file_copy2path(zfn, tempfile.gettempdir())
+                self.logger.info('Anno to %s', zfn)
         total = 0
         savebytes = 0
         succeed = 0
         failed = 0
         hasmore = True
-        while hasmore:
-            if break_event is not None and break_event.is_set():
-                break
-            ano = pageno * pagesize
-            pageno += 1
-            try:
-                values['pageNum'] = pageno
-                alist = post_resp('three.cninfo.com.cn', url, values).json()
-                hasmore = alist['hasMore']
-                if pageno == 1:
-                    total = alist['totalAnnouncement']
-                    if total == 0:
-                        self.logger.warning('Anno list is empty')
-                        return
-                    else:
-                        if existed / total > 0.99:
-                            self.logger.info('Anno Total %d Exists %d Skip it', total, existed)
-                            return
-                        elif usetemp:
-                            zfn = file_copy2path(zfn, tempfile.gettempdir())
-                            zfmoved = True
-                            self.logger.info('Anno Total %d Exists %d copy to %s', total, existed, zfn)
+        with zipfile.ZipFile(zfn, mode='a') as zf:
+            existed = len(zf.filelist)
+            while hasmore:
+                if break_event is not None and break_event.is_set():
+                    break
+                ano = pageno * pagesize
+                pageno += 1
+                try:
+                    values['pageNum'] = pageno
+                    alist = post_resp(host, url, values).json()
+                    hasmore = alist['hasMore']
+                    if pageno == 1:
+                        total = alist['totalAnnouncement']
+                        if total == 0:
+                            self.logger.warning('Anno list is empty')
+                            break
                         else:
                             self.logger.info('Anno Total %d Exists %d', total, existed)
-                if existed + succeed + failed >= total:
-                    break
-                self.logger.debug('Anno getting page %d (%d-%d/%d)', pageno,
-                                  ano + 1, ano + pagesize, total)
-            except Exception as e:
-                self.logger.error(e)
-                self.logger.error('Anno getting page %d FAIL', pageno)
-                if pageno * pagesize >= total:
-                    # is last page
-                    return
-                else:
-                    continue
-            with zipfile.ZipFile(zfn, mode='a') as zf:
+                    if existed + succeed + failed >= total:
+                        break
+                    self.logger.debug('Anno getting page %d (%d-%d/%d)',
+                                      pageno, ano + 1, ano + pagesize, total)
+                except Exception as e:
+                    self.logger.error('Anno getting page %d FAIL %s', pageno, e)
+                    if pageno * pagesize >= total:
+                        # is last page
+                        break
+                    else:
+                        continue
+
                 for ainfo in alist['announcements']:
                     if break_event is not None and break_event.is_set():
                         break
@@ -271,12 +264,12 @@ class CNINFO(Crawler):
                             self.logger.debug('Anno %d/%d Success %d', ano, total, asize)
                     except Exception as e:
                         failed += 1
-                        self.logger.error(e)
-                        self.logger.error('Anno %d/%d FAIL ', ano, total)
+                        self.logger.error('Anno %d/%d FAIL %s', ano, total, e)
 
-        if usetemp and zfmoved:
-            zfn = file_move2path(zfn, savepath)
-            self.logger.info('Anno move to %s', zfn)
+        if os.path.exists(zfn):
+            if usetemp:
+                zfn = file_move2path(zfn, savepath)
+                self.logger.info('Anno move to %s', zfn)
 
         usedtime = time.time() - starttime
         speed = savebytes / usedtime / 1024
@@ -534,6 +527,7 @@ class Sina(Crawler):
         ops.append((sql, param))
 
         enddate = ''
+        holderid = ''
         for row in rows:
             if enddate != row[0]:
                 enddate = row[0]
@@ -876,12 +870,12 @@ class ChinaIPO(Crawler):
             self.logger.error('公司简介 FAIL')
 
     def get_3b_holder(self, dbqueue=None):
+        icount = 0
+        holdertype = HolderType.Top10.value
+        url = 'stock/{}/shareholder.html'.format(self.code)
+        ops = []
+        param = [holdertype, self.code]
         try:
-            icount = 0
-            holdertype = HolderType.Top10.value
-            url = 'stock/{}/shareholder.html'.format(self.code)
-            ops = []
-            param = [holdertype, self.code]
             sql = 'delete from holder_list' \
                   ' where holderID in (select holderID from holder where "股东类型" = ? and "机构ID" = ?)'
             ops.append((sql, param))
