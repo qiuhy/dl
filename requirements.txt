@@ -1,0 +1,9 @@
+requests
+BeautifulSoup4
+html5lib
+numpy
+matplotlib
+pillow
+opencv-python
+xlrd
+pdfminer3k
